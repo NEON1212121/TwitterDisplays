@@ -25,6 +25,61 @@
             border-radius: 10px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             transition: all 0.15s ease-out;
+            cursor: pointer;
+        }
+        .image-item.dragging {
+            opacity: 0.4;
+        }
+        .image-item.drag-over.insert-before,
+        .image-item.drag-over.insert-after {
+            position: relative;
+        }
+        .image-item.drag-over.insert-before::before,
+        .image-item.drag-over.insert-after::after {
+            content: '';
+            position: absolute;
+            top: 10px;
+            bottom: 10px;
+            width: 12px;
+            background: rgba(0, 0, 0, 0.18);
+            border-radius: 8px;
+            pointer-events: none;
+        }
+        .image-item.drag-over.insert-before::before {
+            left: 6px;
+        }
+        .image-item.drag-over.insert-after::after {
+            right: 6px;
+        }
+        .image-item.drag-over.swap-target {
+            outline: 3px solid #1da1f2;
+            outline-offset: -4px;
+        }
+        .preview-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.75);
+            z-index: 9999;
+            cursor: pointer;
+        }
+        .preview-overlay.active {
+            display: flex;
+        }
+        .preview-overlay img {
+            max-width: 90%;
+            max-height: 90%;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+        }
+        body.preview-active h1,
+        body.preview-active #storageControls,
+        body.preview-active .image-grid,
+        body.preview-active #tweet-container {
+            filter: grayscale(100%) brightness(0.7);
+            pointer-events: none;
         }
     </style>
 </head>
@@ -38,9 +93,13 @@
             <input type="file" id="csvFileInput" accept=".csv" style="margin-left: 8px;">
         </label>
         <button id="loadStoredButton" type="button" style="margin-left: 8px;">LocalStorageから読み込む</button>
+        <button id="exportCsvButton" type="button" style="margin-left: 8px;">現在の並び順をCSV保存</button>
         <span id="storageStatus" style="margin-left: 12px; color: #333;"></span>
     </div>
     <ul class="image-grid" id="imageGrid"></ul>
+    <div id="previewOverlay" class="preview-overlay" aria-hidden="true">
+        <img id="previewImage" src="" alt="Preview Image">
+    </div>
 
     <script>
         const storageKey = 'tweetImageUrls';
@@ -59,6 +118,69 @@
             status.textContent = message;
         }
 
+        function getCurrentImageUrls() {
+            return Array.from(document.querySelectorAll('.image-grid .image-item img')).map(img => img.src);
+        }
+
+        function exportUrlsToCsv(urls) {
+            if (!window.showSaveFilePicker) {
+                const csvContent = urls.join('\r\n');
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'tweet-image-order.csv';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                showStorageStatus('並び順をCSVとしてダウンロードしました。');
+                return;
+            }
+
+            window.showSaveFilePicker({
+                suggestedName: 'tweet-image-order.csv',
+                types: [{
+                    description: 'CSV ファイル',
+                    accept: { 'text/csv': ['.csv'] }
+                }]
+            }).then(async (handle) => {
+                const csvContent = urls.join('\r\n');
+                const writable = await handle.createWritable();
+                await writable.write(csvContent);
+                await writable.close();
+                showStorageStatus('並び順をCSVとして保存しました。');
+            }).catch(error => {
+                if (error.name !== 'AbortError') {
+                    console.error('ファイル保存エラー:', error);
+                    showStorageStatus('ファイル保存に失敗しました。');
+                }
+            });
+        }
+
+        function reorderSavedUrls() {
+            const urls = getCurrentImageUrls();
+            saveUrlsToLocalStorage(urls);
+        }
+
+        function showPreview(url) {
+            const overlay = document.getElementById('previewOverlay');
+            const previewImage = document.getElementById('previewImage');
+            previewImage.src = url;
+            overlay.classList.add('active');
+            document.body.classList.add('preview-active');
+            overlay.setAttribute('aria-hidden', 'false');
+        }
+
+        function hidePreview() {
+            const overlay = document.getElementById('previewOverlay');
+            const previewImage = document.getElementById('previewImage');
+            overlay.classList.remove('active');
+            document.body.classList.remove('preview-active');
+            overlay.setAttribute('aria-hidden', 'true');
+            previewImage.src = '';
+        }
+
         function loadImages(imageUrls) {
             const imageGrid = document.getElementById('imageGrid');
             imageGrid.innerHTML = '';
@@ -70,12 +192,14 @@
                 const img = document.createElement('img');
                 img.src = url;
                 img.alt = 'Tweet Image';
+                img.addEventListener('click', () => showPreview(url));
 
                 li.appendChild(img);
                 imageGrid.appendChild(li);
             });
 
             setupHoverEvents();
+            setupDragAndDrop();
         }
 
         function saveUrlsToLocalStorage(urls) {
@@ -98,6 +222,8 @@
         function setupFileInput() {
             const fileInput = document.getElementById('csvFileInput');
             const loadStoredButton = document.getElementById('loadStoredButton');
+
+            document.getElementById('previewOverlay').addEventListener('click', hidePreview);
 
             fileInput.addEventListener('change', event => {
                 const file = event.target.files[0];
@@ -127,6 +253,15 @@
                 } else {
                     showStorageStatus('LocalStorageに保存済みのURLがありません。CSVを読み込んでください。');
                 }
+            });
+
+            document.getElementById('exportCsvButton').addEventListener('click', () => {
+                const urls = getCurrentImageUrls();
+                if (urls.length === 0) {
+                    showStorageStatus('画像がありません。CSVに保存できません。');
+                    return;
+                }
+                exportUrlsToCsv(urls);
             });
         }
 
@@ -205,6 +340,84 @@
                             }, 150);
                         }
                     }, 100);
+                });
+            });
+        }
+
+        function setupDragAndDrop() {
+            let draggedItem = null;
+
+            function getDropAction(item, event) {
+                const rect = item.getBoundingClientRect();
+                const xRatio = (event.clientX - rect.left) / rect.width;
+                const yRatio = (event.clientY - rect.top) / rect.height;
+                const edgeThreshold = 0.20;
+
+                if (xRatio < edgeThreshold || yRatio < edgeThreshold) {
+                    return 'before';
+                }
+                if (xRatio > 1 - edgeThreshold || yRatio > 1 - edgeThreshold) {
+                    return 'after';
+                }
+                return 'swap';
+            }
+
+            function clearDropClasses(item) {
+                item.classList.remove('drag-over', 'insert-before', 'insert-after', 'swap-target');
+                delete item.dataset.dropAction;
+            }
+
+            document.querySelectorAll('.image-item').forEach(item => {
+                item.draggable = true;
+
+                item.addEventListener('dragstart', function(event) {
+                    draggedItem = item;
+                    item.classList.add('dragging');
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', '');
+                });
+
+                item.addEventListener('dragover', function(event) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    const action = getDropAction(item, event);
+                    clearDropClasses(item);
+                    item.classList.add('drag-over', action === 'swap' ? 'swap-target' : action === 'before' ? 'insert-before' : 'insert-after');
+                    item.dataset.dropAction = action;
+                });
+
+                item.addEventListener('dragleave', function() {
+                    clearDropClasses(item);
+                });
+
+                item.addEventListener('drop', function(event) {
+                    event.preventDefault();
+                    const action = item.dataset.dropAction || 'swap';
+                    clearDropClasses(item);
+                    if (!draggedItem || draggedItem === item) return;
+
+                    const imageGrid = document.getElementById('imageGrid');
+                    if (action === 'swap') {
+                        const placeholder = document.createElement('div');
+                        imageGrid.insertBefore(placeholder, item);
+                        imageGrid.insertBefore(item, draggedItem);
+                        imageGrid.insertBefore(draggedItem, placeholder);
+                        imageGrid.removeChild(placeholder);
+                    } else if (action === 'before') {
+                        imageGrid.insertBefore(draggedItem, item);
+                    } else {
+                        imageGrid.insertBefore(draggedItem, item.nextSibling);
+                    }
+
+                    reorderSavedUrls();
+                });
+
+                item.addEventListener('dragend', function() {
+                    if (draggedItem) {
+                        draggedItem.classList.remove('dragging');
+                        draggedItem = null;
+                    }
+                    document.querySelectorAll('.image-item').forEach(el => clearDropClasses(el));
                 });
             });
         }
