@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
+    <title>Twitter Favorite Image List</title>
+    <style>
+        body { font-family: sans-serif; background-color: #f5f8fa; }
+        h1 { text-align: center; color: #1da1f2; }
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            padding: 20px;
+            list-style: none;
+        }
+        .image-item {
+            position: relative;
+        }
+        .image-item img {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.15s ease-out;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Twitter Favorite Image List</h1>
+    <div id="tweet-container"></div>
+    <div id="storageControls" style="padding: 0 20px 10px;">
+        <label>
+            CSVファイルを読み込んでLocalStorageに保存:
+            <input type="file" id="csvFileInput" accept=".csv" style="margin-left: 8px;">
+        </label>
+        <button id="loadStoredButton" type="button" style="margin-left: 8px;">LocalStorageから読み込む</button>
+        <span id="storageStatus" style="margin-left: 12px; color: #333;"></span>
+    </div>
+    <ul class="image-grid" id="imageGrid"></ul>
+
+    <script>
+        const storageKey = 'tweetImageUrls';
+        let hoverTimer = null;
+        let currentHoveredImg = null;
+
+        function parseCsvText(text) {
+            return text
+                .split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#'));
+        }
+
+        function showStorageStatus(message) {
+            const status = document.getElementById('storageStatus');
+            status.textContent = message;
+        }
+
+        function loadImages(imageUrls) {
+            const imageGrid = document.getElementById('imageGrid');
+            imageGrid.innerHTML = '';
+
+            imageUrls.forEach(url => {
+                const li = document.createElement('li');
+                li.className = 'image-item';
+
+                const img = document.createElement('img');
+                img.src = url;
+                img.alt = 'Tweet Image';
+
+                li.appendChild(img);
+                imageGrid.appendChild(li);
+            });
+
+            setupHoverEvents();
+        }
+
+        function saveUrlsToLocalStorage(urls) {
+            localStorage.setItem(storageKey, JSON.stringify(urls));
+            showStorageStatus('LocalStorageに保存しました。次回からCSV不要です。');
+        }
+
+        function loadUrlsFromStorage() {
+            const stored = localStorage.getItem(storageKey);
+            if (!stored) return null;
+            try {
+                const urls = JSON.parse(stored);
+                if (Array.isArray(urls)) return urls;
+            } catch (e) {
+                console.error('LocalStorageデータの解析に失敗しました', e);
+            }
+            return null;
+        }
+
+        function setupFileInput() {
+            const fileInput = document.getElementById('csvFileInput');
+            const loadStoredButton = document.getElementById('loadStoredButton');
+
+            fileInput.addEventListener('change', event => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const urls = parseCsvText(reader.result);
+                    if (urls.length === 0) {
+                        showStorageStatus('CSVに画像URLが見つかりません。');
+                        return;
+                    }
+                    saveUrlsToLocalStorage(urls);
+                    loadImages(urls);
+                };
+                reader.onerror = () => {
+                    showStorageStatus('CSVの読み込みに失敗しました。');
+                };
+                reader.readAsText(file, 'UTF-8');
+            });
+
+            loadStoredButton.addEventListener('click', () => {
+                const urls = loadUrlsFromStorage();
+                if (urls) {
+                    loadImages(urls);
+                    showStorageStatus('LocalStorageから読み込みました。');
+                } else {
+                    showStorageStatus('LocalStorageに保存済みのURLがありません。CSVを読み込んでください。');
+                }
+            });
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            setupFileInput();
+
+            const storedUrls = loadUrlsFromStorage();
+            if (storedUrls) {
+                loadImages(storedUrls);
+                showStorageStatus('LocalStorageから自動読み込みしました。');
+                return;
+            }
+
+            showStorageStatus('LocalStorageに保存済みURLがありません。CSVをアップロードしてください。');
+        });
+
+        function setupHoverEvents() {
+            document.querySelectorAll('.image-item').forEach(item => {
+                const img = item.querySelector('img');
+
+                item.addEventListener('mouseenter', function() {
+                    clearTimeout(hoverTimer);
+
+                    if (currentHoveredImg && currentHoveredImg !== img) {
+                        currentHoveredImg.style.position = '';
+                        currentHoveredImg.style.zIndex = '';
+                        currentHoveredImg.style.top = '';
+                        currentHoveredImg.style.left = '';
+                        currentHoveredImg.style.width = '';
+                        currentHoveredImg.style.height = '';
+                        currentHoveredImg.style.boxShadow = '';
+                        currentHoveredImg.style.margin = '';
+                    }
+
+                    currentHoveredImg = img;
+
+                    const aspectRatio = img.naturalWidth / img.naturalHeight;
+                    let newWidth, newHeight;
+                    const scale = 1.3;
+
+                    if (aspectRatio > 1) {
+                        newHeight = 200 * scale;
+                        newWidth = 200 * scale * aspectRatio;
+                    } else {
+                        newWidth = 200 * scale;
+                        newHeight = (200 * scale) / aspectRatio;
+                    }
+
+                    img.style.width = newWidth + 'px';
+                    img.style.height = newHeight + 'px';
+                    img.style.position = 'absolute';
+                    img.style.zIndex = '10';
+                    img.style.top = '50%';
+                    img.style.left = '50%';
+                    img.style.marginTop = (-newHeight / 2) + 'px';
+                    img.style.marginLeft = (-newWidth / 2) + 'px';
+                    img.style.boxShadow = '0 8px 12px rgba(0, 0, 0, 0.3)';
+                });
+
+                item.addEventListener('mouseleave', function() {
+                    hoverTimer = setTimeout(function() {
+                        if (currentHoveredImg === img) {
+                            img.style.position = 'relative';
+                            img.style.width = '100%';
+                            img.style.height = '200px';
+                            img.style.marginTop = '';
+                            img.style.marginLeft = '';
+                            img.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+
+                            setTimeout(function() {
+                                img.style.position = '';
+                                img.style.zIndex = '';
+                                img.style.top = '';
+                                img.style.left = '';
+                                currentHoveredImg = null;
+                            }, 150);
+                        }
+                    }, 100);
+                });
+            });
+        }
+    </script>
+
+</body>
+</html> 
